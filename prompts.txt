@@ -1,0 +1,1 @@
+it is safe to say that we can use an integer to set an id to each grain of sand belonging to a tetromino, and if in any of the 3 directions previoulsy mentioned, that way we dont need to calculate if a certain coordinates belong to all the pieces spawning.

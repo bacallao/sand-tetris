@@ -24,6 +24,7 @@ export default function SandTetrisDebug({
   const [isRectangleMode, setIsRectangleMode] = useState(false)
   const [rectWidth, setRectWidth] = useState(3)
   const [rectHeight, setRectHeight] = useState(3)
+  const [isGameOver, setIsGameOver] = useState(false)
   const rafIdRef = useRef<number | null>(null)
   const gridRef = useRef(grid)
   const isPlayingRef = useRef(isPlaying)
@@ -51,6 +52,42 @@ export default function SandTetrisDebug({
   useEffect(() => {
     isPlayingRef.current = isPlaying
   }, [isPlaying])
+
+  // Handle space bar for instant drop
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !isGameOver) {
+        e.preventDefault(); // Prevent page scrolling
+        
+        // Perform instant drop
+        const dropOccurred = gridRef.current.instantDrop();
+        
+        if (dropOccurred) {
+          // Update the UI to show the dropped piece
+          setGrid(gridRef.current.clone());
+          setStepCount(prev => prev + 1);
+          
+          // Check for game over after dropping
+          if (gridRef.current.getIsGameOver()) {
+            setIsGameOver(true);
+            if (isPlayingRef.current) {
+              setIsPlaying(false);
+              isPlayingRef.current = false;
+              if (rafIdRef.current !== null) {
+                cancelAnimationFrame(rafIdRef.current);
+                rafIdRef.current = null;
+              }
+            }
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isGameOver])
 
   // End placing on global pointer up
   useEffect(() => {
@@ -94,19 +131,29 @@ export default function SandTetrisDebug({
 
   // Handle cell click to place sand or rectangle
   const handleCellClick = useCallback((x: number, y: number) => {
+    if (isGameOver) return // Don't allow placement if game is over
+    
     if (isRectangleMode) {
       placeRectangleAt(x, y)
     } else {
       placeSandAt(x, y)
     }
-  }, [isRectangleMode, placeSandAt, placeRectangleAt])
+  }, [isGameOver, isRectangleMode, placeSandAt, placeRectangleAt])
 
   // Advance to next state
   const handleNextStep = useCallback(() => {
+    if (isGameOver) return // Don't step if game is over
+    
     gridRef.current.step()
+    
+    // Check for game over after stepping
+    if (gridRef.current.getIsGameOver()) {
+      setIsGameOver(true)
+    }
+    
     setGrid(gridRef.current.clone())
     setStepCount(prev => prev + 1)
-  }, [])
+  }, [isGameOver])
 
   const stopPlaying = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -146,6 +193,18 @@ export default function SandTetrisDebug({
       // Always step the simulation - it handles both physics and elimination
       gridRef.current.step()
       
+      // Check for game over after stepping
+      if (gridRef.current.getIsGameOver()) {
+        setIsGameOver(true)
+        setIsPlaying(false)
+        isPlayingRef.current = false
+        rafIdRef.current = null
+        // Update UI one final time to show game over state
+        setGrid(gridRef.current.clone())
+        setStepCount(prev => prev + 1)
+        return
+      }
+      
       // Always update the UI to show current state
       setGrid(gridRef.current.clone())
       setStepCount(prev => prev + 1)
@@ -175,7 +234,13 @@ export default function SandTetrisDebug({
     gridRef.current = newGrid
     setGrid(newGrid)
     setStepCount(0)
+    setIsGameOver(false) // Reset game over state
   }, [width, height, isPlaying])
+
+  // Restart the game (same as clear but more explicit)
+  const handleRestart = useCallback(() => {
+    handleClear()
+  }, [handleClear])
 
   // Count cells with value 1 (sand)
   const sandCount = grid.countCells(1)
@@ -194,14 +259,15 @@ export default function SandTetrisDebug({
           <div className="flex flex-wrap gap-2">
             <button
               onClick={handlePlay}
-              className={`px-4 py-2 ${isPlaying ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'} text-white rounded font-medium transition-colors`}
+              disabled={isGameOver}
+              className={`px-4 py-2 ${isPlaying ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'} text-white rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               {isPlaying ? 'Stop' : 'Play'}
             </button>
             <button
               onClick={handleNextStep}
-              disabled={isPlaying}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition-colors disabled:opacity-50"
+              disabled={isPlaying || isGameOver}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Next Step
             </button>
@@ -212,17 +278,44 @@ export default function SandTetrisDebug({
             >
               Clear
             </button>
+            {isGameOver && (
+              <button
+                onClick={handleRestart}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded font-medium transition-colors"
+              >
+                🔄 Restart
+              </button>
+            )}
             <button
               onClick={() => setIsRectangleMode(!isRectangleMode)}
-              className={`px-4 py-2 ${isRectangleMode ? 'bg-purple-600 hover:bg-purple-700' : 'bg-purple-500 hover:bg-purple-600'} text-white rounded font-medium transition-colors`}
+              disabled={isGameOver}
+              className={`px-4 py-2 ${isRectangleMode ? 'bg-purple-600 hover:bg-purple-700' : 'bg-purple-500 hover:bg-purple-600'} text-white rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               {isRectangleMode ? '📦 Rectangle' : '⚫ Single'}
             </button>
           </div>
         </div>
 
+        {/* Game Over Banner */}
+        {isGameOver && (
+          <div className="mb-4 p-4 bg-red-900 border-2 border-red-600 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-red-200 text-xl font-bold">🎮 GAME OVER!</h2>
+                <p className="text-red-300 text-sm mt-1">Sand reached the top row after {stepCount} steps</p>
+              </div>
+              <button
+                onClick={handleRestart}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-medium transition-colors"
+              >
+                Play Again
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Rectangle Controls */}
-        {isRectangleMode && (
+        {isRectangleMode && !isGameOver && (
           <div className="mb-4 p-3 bg-gray-900 rounded">
             <p className="text-purple-400 font-medium mb-2">Rectangle Mode Settings</p>
             <div className="flex items-center gap-4">
@@ -265,27 +358,24 @@ export default function SandTetrisDebug({
               <button
                 key={type}
                 onClick={() => spawnTetromino(type)}
-                disabled={isPlaying && grid.isSpawningTetromino()}
-                className="px-3 py-2 bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:opacity-50 text-white rounded font-medium transition-colors text-sm"
+                disabled={isGameOver || (isPlaying && grid.isSpawningTetromino())}
+                className="px-3 py-2 bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium transition-colors text-sm"
               >
                 {type}
               </button>
             ))}
           </div>
-          {grid.isSpawningTetromino() && (
-            <div className="mt-2 text-xs text-cyan-300">
-              Spawning... {Math.round(grid.getTetrominoSpawnProgress() * 100)}%
-            </div>
-          )}
         </div>
 
         <div className="mb-4 text-sm text-gray-400">
           <p><strong>Instructions:</strong></p>
           <p>• Click cells to place sand, or use Rectangle mode for bulk placement</p>
           <p>• Use Tetromino buttons to spawn classic Tetris pieces (each cell = 5×5 sand blocks)</p>
+          <p>• <strong className="text-yellow-400">Press SPACE</strong> to instantly drop falling/spawning tetrominoes to the lowest possible position</p>
           <p>• Tetrominoes spawn row-by-row from top at random X positions within boundaries</p>
           <p>• Components touching both walls will blink and be eliminated after 20 ticks</p>
           <p>• Time stops during elimination (physics paused, only blinking continues)</p>
+          <p>• <strong className="text-red-400">GAME OVER:</strong> When sand reaches the top row (y = {height-1})</p>
         </div>
 
         {/* Grid Display */}
@@ -310,6 +400,7 @@ export default function SandTetrisDebug({
                     key={`${gridX}-${gridY}`}
                     onClick={() => handleCellClick(gridX, gridY)}
                     onPointerDown={(e) => { 
+                      if (isGameOver) return; // Don't allow interaction if game is over
                       e.preventDefault(); 
                       isPlacingRef.current = true; 
                       lastPlaceRef.current = { x: gridX, y: gridY }; 
@@ -320,12 +411,11 @@ export default function SandTetrisDebug({
                       }
                     }}
                     onPointerEnter={() => { 
-                      if (isPlacingRef.current) { 
-                        lastPlaceRef.current = { x: gridX, y: gridY }; 
-                        if (!isRectangleMode) {
-                          placeSandAt(gridX, gridY)
-                        }
-                      } 
+                      if (isGameOver || !isPlacingRef.current) return; // Don't allow interaction if game is over
+                      lastPlaceRef.current = { x: gridX, y: gridY }; 
+                      if (!isRectangleMode) {
+                        placeSandAt(gridX, gridY)
+                      }
                     }}
                     style={{
                       width: `${cellSize}px`,
