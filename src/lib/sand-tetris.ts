@@ -3,6 +3,12 @@
 
 export type CellValue = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
+export interface SandGrain {
+  color: CellValue;
+  speed: number;  // Base speed - how many ticks between movements
+  ticks: number;  // Current tick counter - decreases each step
+}
+
 export interface GridPosition {
   x: number;
   y: number;
@@ -21,6 +27,9 @@ export const GRID_CONFIG = {
   ELIMINATION_TICKS: 20,
   WHITE_COLOR: 6 as CellValue,
   BLINK_INTERVAL: 5,
+  // Grain timing configuration
+  BASE_GRAIN_SPEED: 1,      // Standard speed for all grains
+  SPAWNING_GRAIN_SPEED: 5,  // Slower speed for spawning tetromino blocks
 } as const;
 
 // Tetromino shapes - each 1 represents a 5x5 block of sand
@@ -133,13 +142,12 @@ class DisjointSetUnion {
 }
 
 export class SandTetrisGrid {
-  private grid: CellValue[][];
+  private grid: (SandGrain | null)[][];
   public readonly width: number;
   public readonly height: number;
   private connectedComponents = new Map<number, ConnectedComponent>();
   private nextComponentId = 1;
   private hasActiveEliminations = false;
-  private tetrominoSpawnState: TetrominoSpawnState | null = null;
   private isGameOver = false;
   private fallingPieceCells = new Set<string>();
   private canSpawnNewPiece = true;
@@ -156,21 +164,53 @@ export class SandTetrisGrid {
     this.grid = this.createEmptyGrid();
   }
 
-  private createEmptyGrid(): CellValue[][] {
+  private createEmptyGrid(): (SandGrain | null)[][] {
     return Array.from({ length: this.height }, () => 
-      new Array(this.width).fill(0) as CellValue[]
+      new Array(this.width).fill(null) as (SandGrain | null)[]
     );
   }
 
+  /**
+   * Creates a new sand grain with specified speed (defaults to base speed)
+   */
+  private createGrain(color: CellValue, isSpawning: boolean = false): SandGrain {
+    const speed = isSpawning ? GRID_CONFIG.SPAWNING_GRAIN_SPEED : GRID_CONFIG.BASE_GRAIN_SPEED;
+    return {
+      color,
+      speed,
+      ticks: speed // Start with full tick count
+    };
+  }
+
   getCell(x: number, y: number): CellValue {
-    return this.isValidPosition(x, y) ? this.grid[y][x] : 0;
+    if (!this.isValidPosition(x, y)) return 0;
+    const grain = this.grid[y][x];
+    return grain ? grain.color : 0;
   }
 
   setCell(x: number, y: number, value: CellValue): boolean {
     if (!this.isValidPosition(x, y) || !this.isValidCellValue(value)) {
       return false;
     }
-    this.grid[y][x] = value;
+    this.grid[y][x] = value === 0 ? null : this.createGrain(value);
+    return true;
+  }
+
+  /**
+   * Gets the grain object at the specified position
+   */
+  getGrain(x: number, y: number): SandGrain | null {
+    return this.isValidPosition(x, y) ? this.grid[y][x] : null;
+  }
+
+  /**
+   * Sets a grain object at the specified position
+   */
+  setGrain(x: number, y: number, grain: SandGrain | null): boolean {
+    if (!this.isValidPosition(x, y)) {
+      return false;
+    }
+    this.grid[y][x] = grain;
     return true;
   }
 
@@ -189,7 +229,6 @@ export class SandTetrisGrid {
     this.connectedComponents.clear();
     this.nextComponentId = 1;
     this.hasActiveEliminations = false;
-    this.tetrominoSpawnState = null;
     this.isGameOver = false;
     this.fallingPieceCells.clear();
     this.canSpawnNewPiece = true;
@@ -235,11 +274,11 @@ export class SandTetrisGrid {
     // First pass: union adjacent cells of same color
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
-        const cellValue = this.grid[y][x];
-        if (cellValue === 0) continue;
+        const grain = this.grid[y][x];
+        if (!grain) continue;
         
         const currentKey = this.positionToKey(x, y);
-        const currentColor = this.getOriginalColor(x, y, cellValue);
+        const currentColor = this.getOriginalColor(x, y, grain.color);
         colorMap.set(currentKey, currentColor);
         
         // Check only right and up neighbors to avoid redundancy
@@ -248,9 +287,9 @@ export class SandTetrisGrid {
           const ny = y + dy;
           
           if (this.isValidPosition(nx, ny)) {
-            const neighborValue = this.grid[ny][nx];
-            if (neighborValue !== 0) {
-              const neighborColor = this.getOriginalColor(nx, ny, neighborValue);
+            const neighborGrain = this.grid[ny][nx];
+            if (neighborGrain) {
+              const neighborColor = this.getOriginalColor(nx, ny, neighborGrain.color);
               if (neighborColor === currentColor) {
                 dsu.union(currentKey, this.positionToKey(nx, ny));
               }
@@ -264,9 +303,9 @@ export class SandTetrisGrid {
           const ny = y + dy;
           
           if (this.isValidPosition(nx, ny)) {
-            const neighborValue = this.grid[ny][nx];
-            if (neighborValue !== 0) {
-              const neighborColor = this.getOriginalColor(nx, ny, neighborValue);
+            const neighborGrain = this.grid[ny][nx];
+            if (neighborGrain) {
+              const neighborColor = this.getOriginalColor(nx, ny, neighborGrain.color);
               if (neighborColor === currentColor) {
                 dsu.union(currentKey, this.positionToKey(nx, ny));
               }
@@ -324,8 +363,8 @@ export class SandTetrisGrid {
       // Update cell colors
       for (const cellKey of component.cells) {
         const { x, y } = this.keyToPosition(cellKey);
-        if (this.isValidPosition(x, y)) {
-          this.grid[y][x] = displayColor;
+        if (this.isValidPosition(x, y) && this.grid[y][x]) {
+          this.grid[y][x]!.color = displayColor;
         }
       }
       
@@ -336,7 +375,7 @@ export class SandTetrisGrid {
         for (const cellKey of component.cells) {
           const { x, y } = this.keyToPosition(cellKey);
           if (this.isValidPosition(x, y)) {
-            this.grid[y][x] = 0;
+            this.grid[y][x] = null;
           }
         }
         toDelete.push(id);
@@ -401,7 +440,7 @@ export class SandTetrisGrid {
     
     for (let y = sy; y < endY; y++) {
       for (let x = sx; x < endX; x++) {
-        this.grid[y][x] = value;
+        this.grid[y][x] = value === 0 ? null : this.createGrain(value);
       }
     }
   }
@@ -423,31 +462,46 @@ export class SandTetrisGrid {
     
     const startX = Math.floor(Math.random() * (maxStartX + 1));
     
-    this.tetrominoSpawnState = {
-      type,
-      startX,
-      currentRow: 0,
-      totalRows: tetrominoHeight,
-      isActive: true,
-      shape,
-      color
-    };
+    // Spawn the entire tetromino shape immediately above the grid
+    const baseSpawnY = this.height; // Start above the grid
     
     this.fallingPieceCells.clear();
-    this.canSpawnNewPiece = false;
     
+    // Place the complete tetromino shape
+    for (let shapeRow = 0; shapeRow < shape.length; shapeRow++) {
+      for (let shapeCol = 0; shapeCol < shape[shapeRow].length; shapeCol++) {
+        if (shape[shapeRow][shapeCol] === 1) {
+          const baseX = startX + (shapeCol * TETROMINO_BLOCK_SIZE);
+          const baseY = baseSpawnY - tetrominoHeight + (shapeRow * TETROMINO_BLOCK_SIZE);
+          
+          // Fill 5x5 block for this shape cell
+          for (let blockY = 0; blockY < TETROMINO_BLOCK_SIZE; blockY++) {
+            for (let blockX = 0; blockX < TETROMINO_BLOCK_SIZE; blockX++) {
+              const x = baseX + blockX;
+              const y = baseY + blockY;
+              
+              // Only place blocks that are within the grid
+              if (this.isValidPosition(x, y)) {
+                this.grid[y][x] = this.createGrain(color, true); // true = isSpawning
+                this.fallingPieceCells.add(this.positionToKey(x, y));
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    this.canSpawnNewPiece = false;
     return true;
   }
 
   isSpawningTetromino(): boolean {
-    return this.tetrominoSpawnState?.isActive ?? false;
+    return this.fallingPieceCells.size > 0 && !this.canSpawnNewPiece;
   }
 
   getTetrominoSpawnProgress(): number {
-    if (!this.tetrominoSpawnState?.isActive) {
-      return 1;
-    }
-    return this.tetrominoSpawnState.currentRow / this.tetrominoSpawnState.totalRows;
+    // Since we spawn instantly now, always return 1 (complete)
+    return 1;
   }
 
   private checkCollisionWithPlacedPieces(x: number, y: number, direction: 'left' | 'right' | 'bottom'): boolean {
@@ -460,8 +514,8 @@ export class SandTetrisGrid {
     }
     
     if (this.isValidPosition(checkX, checkY)) {
-      const cellValue = this.grid[checkY][checkX];
-      if (cellValue >= 1 && cellValue <= 6) {
+      const grain = this.grid[checkY][checkX];
+      if (grain && grain.color >= 1 && grain.color <= 6) {
         return !this.fallingPieceCells.has(this.positionToKey(checkX, checkY));
       }
     }
@@ -483,40 +537,118 @@ export class SandTetrisGrid {
     return false;
   }
 
-  private updateTetrominoSpawning(targetGrid: CellValue[][]): boolean {
-    if (!this.tetrominoSpawnState?.isActive) {
-      return false;
-    }
-
-    const { shape, startX, currentRow, totalRows, color } = this.tetrominoSpawnState;
-    
-    if (currentRow >= totalRows) {
-      this.tetrominoSpawnState = null;
-      return false;
-    }
-
-    const spawnY = this.height - 1;
-    const shapeRowIndex = Math.floor(currentRow / TETROMINO_BLOCK_SIZE);
-    
-    if (shapeRowIndex < shape.length) {
-      const shapeRow = shape[shapeRowIndex];
-      
-      for (let col = 0; col < shapeRow.length; col++) {
-        if (shapeRow[col] === 1) {
-          const baseX = startX + col * TETROMINO_BLOCK_SIZE;
-          for (let blockX = 0; blockX < TETROMINO_BLOCK_SIZE; blockX++) {
-            const x = baseX + blockX;
-            if (this.isValidPosition(x, spawnY)) {
-              targetGrid[spawnY][x] = color;
-              this.fallingPieceCells.add(this.positionToKey(x, spawnY));
-            }
+  /**
+   * Transitions all spawning speed grains to base speed
+   * Called when falling pieces settle or tetromino spawning ends
+   */
+  private transitionSpawningGrainsToBaseSpeed(): void {
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        const grain = this.grid[y][x];
+        if (grain && grain.speed === GRID_CONFIG.SPAWNING_GRAIN_SPEED) {
+          grain.speed = GRID_CONFIG.BASE_GRAIN_SPEED;
+          // Reset ticks to new speed if grain was waiting
+          if (grain.ticks > GRID_CONFIG.BASE_GRAIN_SPEED) {
+            grain.ticks = GRID_CONFIG.BASE_GRAIN_SPEED;
           }
         }
       }
     }
+  }
 
-    this.tetrominoSpawnState.currentRow++;
-    return true;
+
+  /**
+   * Simulates physics for sand particles falling down with timing system
+   * Each grain has its own speed and tick counter
+   * Returns information about the physics simulation results
+   */
+  private simulatePhysics(): { anyMovement: boolean; newGrid: (SandGrain | null)[][]; newFallingPieceCells: Set<string>; stuckBlocksAtTop: Set<string> } {
+    const nextGrid = this.createEmptyGrid();
+    const newFallingPieceCells = new Set<string>();
+    const stuckBlocksAtTop = new Set<string>();
+    let anyMovement = false;
+
+    // Process cells bottom-up for proper physics
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        const grain = this.grid[y][x];
+        if (!grain) continue;
+
+        const cellKey = this.positionToKey(x, y);
+        const isFalling = this.fallingPieceCells.has(cellKey);
+        
+        // Check if spawning grain should transition to base speed
+        let shouldTransitionSpeed = false;
+        if (grain.speed === GRID_CONFIG.SPAWNING_GRAIN_SPEED && isFalling) {
+          // Check if touching non-spawning grains
+          const neighbors = [
+            [x, y - 1], [x - 1, y], [x + 1, y], [x, y + 1],  // orthogonal
+            [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]  // diagonal
+          ];
+          
+          for (const [nx, ny] of neighbors) {
+            if (this.isValidPosition(nx, ny)) {
+              const neighborGrain = this.grid[ny][nx];
+              if (neighborGrain && 
+                  neighborGrain.speed === GRID_CONFIG.BASE_GRAIN_SPEED && 
+                  !this.fallingPieceCells.has(this.positionToKey(nx, ny))) {
+                shouldTransitionSpeed = true;
+                break;
+              }
+            }
+          }
+        }
+        
+        // Update grain timing
+        grain.ticks--;
+        
+        let placed = false;
+        let newX = x, newY = y;
+        let newGrain = shouldTransitionSpeed ? 
+          { ...grain, speed: GRID_CONFIG.BASE_GRAIN_SPEED, ticks: GRID_CONFIG.BASE_GRAIN_SPEED } : 
+          grain;
+
+        // Only try to move if ticks reached 0
+        if (grain.ticks <= 0) {
+          // Reset ticks to speed for next movement (use newGrain's speed in case it transitioned)
+          newGrain = { ...newGrain, ticks: newGrain.speed };
+          
+          // Try falling positions
+          const positions = [
+            [x, y - 1],           // straight down
+            [x - 1, y - 1],       // down-left
+            [x + 1, y - 1]        // down-right
+          ];
+
+          for (const [px, py] of positions) {
+            if (py >= 0 && px >= 0 && px < this.width && nextGrid[py][px] === null) {
+              nextGrid[py][px] = newGrain;
+              newX = px;
+              newY = py;
+              placed = true;
+              anyMovement = true;
+              break;
+            }
+          }
+        }
+
+        if (!placed) {
+          nextGrid[y][x] = newGrain;
+          
+          // Check if block is stuck at the top row
+          // A block is stuck if: ticks reached 0, tried to move but couldn't, and is at top row
+          if (y === this.height - 1 && grain.ticks <= 0) {
+            stuckBlocksAtTop.add(this.positionToKey(x, y));
+          }
+        }
+
+        if (isFalling) {
+          newFallingPieceCells.add(this.positionToKey(newX, newY));
+        }
+      }
+    }
+
+    return { anyMovement, newGrid: nextGrid, newFallingPieceCells, stuckBlocksAtTop };
   }
 
   step(): boolean {
@@ -534,74 +666,31 @@ export class SandTetrisGrid {
     let anyChange = eliminated;
 
     // Physics simulation
-    const nextGrid = this.createEmptyGrid();
-    const newFallingPieceCells = new Set<string>();
-    let anyMovement = false;
-
-    // Process cells bottom-up for proper physics
-    for (let y = 0; y < this.height; y++) {
-      for (let x = 0; x < this.width; x++) {
-        const cell = this.grid[y][x];
-        if (cell === 0) continue;
-
-        const cellKey = this.positionToKey(x, y);
-        const isFalling = this.fallingPieceCells.has(cellKey);
-        
-        let placed = false;
-        let newX = x, newY = y;
-
-        // Try falling positions
-        const positions = [
-          [x, y - 1],           // straight down
-          [x - 1, y - 1],       // down-left
-          [x + 1, y - 1]        // down-right
-        ];
-
-        for (const [px, py] of positions) {
-          if (py >= 0 && px >= 0 && px < this.width && nextGrid[py][px] === 0) {
-            nextGrid[py][px] = cell;
-            newX = px;
-            newY = py;
-            placed = true;
-            anyMovement = true;
-            break;
-          }
-        }
-
-        if (!placed) {
-          nextGrid[y][x] = cell;
-        }
-
-        if (isFalling) {
-          newFallingPieceCells.add(this.positionToKey(newX, newY));
-        }
-      }
-    }
-
+    const { anyMovement, newGrid, newFallingPieceCells, stuckBlocksAtTop } = this.simulatePhysics();
+    
     this.fallingPieceCells = newFallingPieceCells;
-    this.grid = nextGrid;
+    this.grid = newGrid;
 
     if (anyMovement) anyChange = true;
 
     // Check collision for falling pieces
     if (!this.canSpawnNewPiece && this.fallingPieceCells.size > 0) {
       if (this.checkFallingPieceCollisions()) {
+        // Transition any remaining spawning speed grains to base speed when they settle
+        this.transitionSpawningGrainsToBaseSpeed();
         this.canSpawnNewPiece = true;
         this.fallingPieceCells.clear();
       }
     }
 
-    // Check game over
-    for (let x = 0; x < this.width; x++) {
-      if (this.grid[this.height - 1][x] !== 0) {
-        this.isGameOver = true;
-        return true;
-      }
+    // Check game over - only if blocks are stuck at the top
+    // A block is stuck if it has ticks = 0 and couldn't move from the top row
+    if (stuckBlocksAtTop.size > 0) {
+      this.isGameOver = true;
+      return true;
     }
 
-    // Spawn tetromino
-    const stillSpawning = this.updateTetrominoSpawning(this.grid);
-    if (stillSpawning) anyChange = true;
+    // Tetromino spawning is now handled instantly in startTetrominoSpawn
 
     return anyChange;
   }
@@ -613,8 +702,8 @@ export class SandTetrisGrid {
   countCells(value: CellValue): number {
     let count = 0;
     for (const row of this.grid) {
-      for (const cell of row) {
-        if (cell === value) count++;
+      for (const grain of row) {
+        if (grain && grain.color === value) count++;
       }
     }
     return count;
@@ -625,7 +714,9 @@ export class SandTetrisGrid {
     
     // Deep copy grid
     for (let y = 0; y < this.height; y++) {
-      copy.grid[y] = [...this.grid[y]];
+      copy.grid[y] = this.grid[y].map(grain => 
+        grain ? { ...grain } : null
+      );
     }
     
     // Copy state
@@ -643,10 +734,7 @@ export class SandTetrisGrid {
       });
     }
     
-    // Copy tetromino state
-    if (this.tetrominoSpawnState) {
-      copy.tetrominoSpawnState = { ...this.tetrominoSpawnState };
-    }
+    // No tetromino state to copy since we spawn instantly
     
     return copy;
   }
@@ -695,100 +783,32 @@ export class SandTetrisGrid {
     // First, process a generation to clear eliminations and prevent errors
     this.step();
 
-    // Handle spawning tetromino
-    if (this.tetrominoSpawnState?.isActive) {
-      const { type, color, startX, shape, currentRow, totalRows } = this.tetrominoSpawnState;
-      
-      // Clear any partial spawning
-      for (const cellKey of this.fallingPieceCells) {
-        const { x, y } = this.keyToPosition(cellKey);
-        this.grid[y][x] = 0;
-      }
-      this.fallingPieceCells.clear();
-      this.tetrominoSpawnState = null;
-
-      // Calculate tetromino dimensions
-      const tetrominoWidth = shape[0].length * TETROMINO_BLOCK_SIZE;
-
-      // Find highest obstacle in tetromino's X range
-      let highestObstacleY = -1;
-      for (let x = startX; x < startX + tetrominoWidth && x < this.width; x++) {
-        for (let y = 0; y < this.height; y++) {
-          if (this.grid[y][x] !== 0) {
-            highestObstacleY = Math.max(highestObstacleY, y);
-          }
-        }
-      }
-
-      // Place tetromino on top of highest obstacle
-      const targetBottomY = highestObstacleY + 1;
-      
-      // Check if tetromino fits - the complete tetromino should fit from the target position
-      const tetrominoHeight = shape.length * TETROMINO_BLOCK_SIZE;
-      const targetTopY = targetBottomY + tetrominoHeight - 1;
-      
-      // Game over only if the tetromino would extend beyond the top of the grid
-      // Note: grid Y coordinates are 0 to (height-1), so targetTopY must be < height
-      if (targetTopY >= this.height) {
-        this.isGameOver = true;
-        return true;
-      }
-
-      // Place the complete tetromino shape as a solid structure
-      // Bottom to top, left to right placement
-      for (let shapeRow = 0; shapeRow < shape.length; shapeRow++) {
-        for (let shapeCol = 0; shapeCol < shape[shapeRow].length; shapeCol++) {
-          if (shape[shapeRow][shapeCol] === 1) {
-            const baseX = startX + (shapeCol * TETROMINO_BLOCK_SIZE);
-            const baseY = targetBottomY + (shapeRow * TETROMINO_BLOCK_SIZE);
-            
-            // Fill 5x5 block for this shape cell
-            for (let blockY = 0; blockY < TETROMINO_BLOCK_SIZE; blockY++) {
-              for (let blockX = 0; blockX < TETROMINO_BLOCK_SIZE; blockX++) {
-                const x = baseX + blockX;
-                const y = baseY + blockY;
-                
-                if (this.isValidPosition(x, y)) {
-                  if (this.grid[y][x] === 0) {
-                    this.grid[y][x] = color;
-                  } else {
-                    // Overlap detected - game over
-                    this.isGameOver = true;
-                    return true;
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // The tetromino is now placed as a solid structure
-      // Clear falling pieces and allow new spawning
-      this.fallingPieceCells.clear();
-      this.canSpawnNewPiece = true;
-      return true;
-    }
-
-    // Handle falling pieces (individual sand grains)
+    // Handle falling tetromino pieces
     if (this.fallingPieceCells.size > 0) {
-      // Store falling piece data and clear current positions
-      const fallingPieces: Array<{ x: number; y: number; value: CellValue }> = [];
-      let minX = this.width, maxX = -1;
-      
+      // Clear current falling pieces and get their info for instant drop
+      const fallingPieces: Array<{ x: number; y: number; color: CellValue }> = [];
       for (const cellKey of this.fallingPieceCells) {
         const { x, y } = this.keyToPosition(cellKey);
-        fallingPieces.push({ x, y, value: this.grid[y][x] });
-        minX = Math.min(minX, x);
-        maxX = Math.max(maxX, x);
-        this.grid[y][x] = 0; // Clear old position
+        const grain = this.grid[y][x];
+        if (grain) {
+          fallingPieces.push({ x, y, color: grain.color });
+        }
+        this.grid[y][x] = null;
+      }
+      this.fallingPieceCells.clear();
+
+      // Find the X range of falling pieces
+      let minX = this.width, maxX = -1;
+      for (const piece of fallingPieces) {
+        minX = Math.min(minX, piece.x);
+        maxX = Math.max(maxX, piece.x);
       }
 
       // Find highest obstacle in the X range of falling pieces
       let highestObstacleY = -1;
       for (let x = minX; x <= maxX; x++) {
         for (let y = 0; y < this.height; y++) {
-          if (this.grid[y][x] !== 0) {
+          if (this.grid[y][x] !== null) {
             highestObstacleY = Math.max(highestObstacleY, y);
           }
         }
@@ -801,7 +821,7 @@ export class SandTetrisGrid {
       for (let x = minX; x <= maxX; x++) {
         let columnHeight = -1;
         for (let y = 0; y < this.height; y++) {
-          if (this.grid[y][x] !== 0) {
+          if (this.grid[y][x] !== null) {
             columnHeight = Math.max(columnHeight, y);
           }
         }
@@ -814,15 +834,15 @@ export class SandTetrisGrid {
         const targetY = currentHeight + 1;
         
         if (targetY < this.height) {
-          this.grid[targetY][piece.x] = piece.value;
+          this.grid[targetY][piece.x] = this.createGrain(piece.color);
           columnHeights.set(piece.x, targetY); // Update column height
         }
       }
 
-      this.fallingPieceCells.clear();
       this.canSpawnNewPiece = true;
       return true;
     }
+
 
     return false;
   }
@@ -835,15 +855,7 @@ export class SandTetrisGrid {
     // First, process a generation to clear eliminations and prevent errors
     this.step();
 
-    // Handle spawning tetromino - just advance the spawn by one row
-    if (this.tetrominoSpawnState?.isActive) {
-      // Simply advance the spawning by one row if possible
-      if (this.tetrominoSpawnState.currentRow < this.tetrominoSpawnState.totalRows) {
-        this.tetrominoSpawnState.currentRow++;
-        return true;
-      }
-      return false;
-    }
+    // Since we spawn instantly now, no special spawning handling needed
 
     // Handle falling pieces - move them down by 1 cell
     if (this.fallingPieceCells.size > 0) {
@@ -853,14 +865,17 @@ export class SandTetrisGrid {
       // Collect current falling pieces
       for (const cellKey of this.fallingPieceCells) {
         const { x, y } = this.keyToPosition(cellKey);
-        piecesToMove.push({ x, y, value: this.grid[y][x] });
+        const grain = this.grid[y][x];
+        if (grain) {
+          piecesToMove.push({ x, y, value: grain.color });
+        }
       }
 
       // Check if we can move all pieces down by 1
       let canMoveDown = true;
       for (const piece of piecesToMove) {
         const newY = piece.y - 1;
-        if (newY < 0 || (this.grid[newY][piece.x] !== 0 && !this.fallingPieceCells.has(this.positionToKey(piece.x, newY)))) {
+        if (newY < 0 || (this.grid[newY][piece.x] !== null && !this.fallingPieceCells.has(this.positionToKey(piece.x, newY)))) {
           canMoveDown = false;
           break;
         }
@@ -870,13 +885,13 @@ export class SandTetrisGrid {
         // Clear old positions
         for (const cellKey of this.fallingPieceCells) {
           const { x, y } = this.keyToPosition(cellKey);
-          this.grid[y][x] = 0;
+          this.grid[y][x] = null;
         }
 
         // Move pieces down
         for (const piece of piecesToMove) {
           const newY = piece.y - 1;
-          this.grid[newY][piece.x] = piece.value;
+          this.grid[newY][piece.x] = this.createGrain(piece.value);
           newFallingPieceCells.add(this.positionToKey(piece.x, newY));
         }
 
