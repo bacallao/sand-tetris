@@ -827,4 +827,70 @@ export class SandTetrisGrid {
     return false;
   }
 
+  /**
+   * Moves the current tetromino down by one sand block (1 cell)
+   * Returns true if movement occurred, false if no tetromino to move or blocked
+   */
+  softDrop(): boolean {
+    // First, process a generation to clear eliminations and prevent errors
+    this.step();
+
+    // Handle spawning tetromino - just advance the spawn by one row
+    if (this.tetrominoSpawnState?.isActive) {
+      // Simply advance the spawning by one row if possible
+      if (this.tetrominoSpawnState.currentRow < this.tetrominoSpawnState.totalRows) {
+        this.tetrominoSpawnState.currentRow++;
+        return true;
+      }
+      return false;
+    }
+
+    // Handle falling pieces - move them down by 1 cell
+    if (this.fallingPieceCells.size > 0) {
+      const newFallingPieceCells = new Set<string>();
+      const piecesToMove: Array<{ x: number; y: number; value: CellValue }> = [];
+      
+      // Collect current falling pieces
+      for (const cellKey of this.fallingPieceCells) {
+        const { x, y } = this.keyToPosition(cellKey);
+        piecesToMove.push({ x, y, value: this.grid[y][x] });
+      }
+
+      // Check if we can move all pieces down by 1
+      let canMoveDown = true;
+      for (const piece of piecesToMove) {
+        const newY = piece.y - 1;
+        if (newY < 0 || (this.grid[newY][piece.x] !== 0 && !this.fallingPieceCells.has(this.positionToKey(piece.x, newY)))) {
+          canMoveDown = false;
+          break;
+        }
+      }
+
+      if (canMoveDown) {
+        // Clear old positions
+        for (const cellKey of this.fallingPieceCells) {
+          const { x, y } = this.keyToPosition(cellKey);
+          this.grid[y][x] = 0;
+        }
+
+        // Move pieces down
+        for (const piece of piecesToMove) {
+          const newY = piece.y - 1;
+          this.grid[newY][piece.x] = piece.value;
+          newFallingPieceCells.add(this.positionToKey(piece.x, newY));
+        }
+
+        this.fallingPieceCells = newFallingPieceCells;
+        return true;
+      } else {
+        // Can't move down - settle the pieces
+        this.canSpawnNewPiece = true;
+        this.fallingPieceCells.clear();
+        return false;
+      }
+    }
+
+    return false;
+  }
+
 }
