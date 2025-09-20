@@ -697,7 +697,7 @@ export class SandTetrisGrid {
 
     // Handle spawning tetromino
     if (this.tetrominoSpawnState?.isActive) {
-      const { type, color, startX, shape } = this.tetrominoSpawnState;
+      const { type, color, startX, shape, currentRow, totalRows } = this.tetrominoSpawnState;
       
       // Clear any partial spawning
       for (const cellKey of this.fallingPieceCells) {
@@ -723,9 +723,13 @@ export class SandTetrisGrid {
       // Place tetromino on top of highest obstacle
       const targetBottomY = highestObstacleY + 1;
       
-      // Check if tetromino fits
+      // Check if tetromino fits - the complete tetromino should fit from the target position
       const tetrominoHeight = shape.length * TETROMINO_BLOCK_SIZE;
-      if (targetBottomY + tetrominoHeight > this.height) {
+      const targetTopY = targetBottomY + tetrominoHeight - 1;
+      
+      // Game over only if the tetromino would extend beyond the top of the grid
+      // Note: grid Y coordinates are 0 to (height-1), so targetTopY must be < height
+      if (targetTopY >= this.height) {
         this.isGameOver = true;
         return true;
       }
@@ -735,8 +739,8 @@ export class SandTetrisGrid {
       for (let shapeRow = 0; shapeRow < shape.length; shapeRow++) {
         for (let shapeCol = 0; shapeCol < shape[shapeRow].length; shapeCol++) {
           if (shape[shapeRow][shapeCol] === 1) {
-            const baseX = startX + shapeCol * TETROMINO_BLOCK_SIZE;
-            const baseY = targetBottomY + shapeRow * TETROMINO_BLOCK_SIZE;
+            const baseX = startX + (shapeCol * TETROMINO_BLOCK_SIZE);
+            const baseY = targetBottomY + (shapeRow * TETROMINO_BLOCK_SIZE);
             
             // Fill 5x5 block for this shape cell
             for (let blockY = 0; blockY < TETROMINO_BLOCK_SIZE; blockY++) {
