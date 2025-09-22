@@ -1,4 +1,3 @@
-import LogoParticles from "../components/logo-particles";
 import SandTetrisDebug from "../components/SandTetrisDebug";
 
 export default function Page() {

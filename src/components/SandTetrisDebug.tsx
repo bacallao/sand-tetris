@@ -82,6 +82,13 @@ export default function SandTetrisDebug({
             }
           }
         }
+      } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+        e.preventDefault();
+        const moved = gridRef.current.shiftActiveTetromino(e.code === 'ArrowLeft' ? 'left' : 'right')
+        if (moved) {
+          setGrid(gridRef.current.clone())
+          setStepCount(prev => prev + 1)
+        }
       }
     };
 
@@ -374,6 +381,7 @@ export default function SandTetrisDebug({
           <p>• Click cells to place sand, or use Rectangle mode for bulk placement</p>
           <p>• Use Tetromino buttons to spawn classic Tetris pieces (each cell = 5×5 sand blocks)</p>
           <p>• <strong className="text-yellow-400">Press SPACE</strong> to instantly drop falling/spawning tetrominoes to the lowest possible position</p>
+          <p>• Use <strong className="text-blue-400">LEFT/RIGHT ARROWS</strong> to shift the active tetromino horizontally</p>
           <p>• Tetrominoes spawn row-by-row from top at random X positions within boundaries</p>
           <p>• Components touching both walls will blink and be eliminated after 20 ticks</p>
           <p>• Time stops during elimination (physics paused, only blinking continues)</p>
