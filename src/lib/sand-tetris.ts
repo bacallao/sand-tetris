@@ -852,28 +852,65 @@ export class SandTetrisGrid {
     // First, process a generation to clear eliminations and prevent errors
     this.step();
 
-    // Handle falling tetromino pieces
-    if (this.fallingPieceCells.size > 0) {
-      // Clear current falling pieces and get their info for instant drop
-      const fallingPieces: Array<{ x: number; y: number; color: CellValue }> = [];
+    // Check if we're currently spawning a tetromino
+    const wasSpawning = this.tetrominoSpawnState?.isActive ?? false;
+    let allTetrominoPieces: Array<{ x: number; y: number; color: CellValue }> = [];
+    
+    // If spawning, we need to collect ALL tetromino pieces (spawned + unspawned)
+    if (wasSpawning && this.tetrominoSpawnState) {
+      const { shape, startX, color } = this.tetrominoSpawnState;
+      
+      // Collect all pieces from the complete tetromino shape
+      for (let shapeRow = 0; shapeRow < shape.length; shapeRow++) {
+        const row = shape[shapeRow];
+        for (let col = 0; col < row.length; col++) {
+          if (row[col] === 1) {
+            const baseX = startX + col * TETROMINO_BLOCK_SIZE;
+            for (let blockY = 0; blockY < TETROMINO_BLOCK_SIZE; blockY++) {
+              for (let blockX = 0; blockX < TETROMINO_BLOCK_SIZE; blockX++) {
+                const x = baseX + blockX;
+                // All pieces start from the top of the grid
+                const y = this.height - 1 - blockY - (shapeRow * TETROMINO_BLOCK_SIZE);
+                allTetrominoPieces.push({ x, y, color });
+              }
+            }
+          }
+        }
+      }
+      
+      // Clear spawning state
+      this.tetrominoSpawnState = null;
+      
+      // Clear any existing falling pieces from the grid since we're replacing them
+      for (const cellKey of this.fallingPieceCells) {
+        const { x, y } = this.keyToPosition(cellKey);
+        this.grid[y][x] = null;
+      }
+      this.fallingPieceCells.clear();
+    }
+    // If not spawning, collect existing falling pieces
+    else if (this.fallingPieceCells.size > 0) {
       for (const cellKey of this.fallingPieceCells) {
         const { x, y } = this.keyToPosition(cellKey);
         const grain = this.grid[y][x];
         if (grain) {
-          fallingPieces.push({ x, y, color: grain.color });
+          allTetrominoPieces.push({ x, y, color: grain.color });
         }
         this.grid[y][x] = null;
       }
       this.fallingPieceCells.clear();
+    }
 
-      // Find the X range of falling pieces
+    // Handle instant drop if we have pieces to drop
+    if (allTetrominoPieces.length > 0) {
+      // Find the X range of all tetromino pieces
       let minX = this.width, maxX = -1;
-      for (const piece of fallingPieces) {
+      for (const piece of allTetrominoPieces) {
         minX = Math.min(minX, piece.x);
         maxX = Math.max(maxX, piece.x);
       }
 
-      // Find highest obstacle in the X range of falling pieces
+      // Find highest obstacle in the X range of tetromino pieces
       let highestObstacleY = -1;
       for (let x = minX; x <= maxX; x++) {
         for (let y = 0; y < this.height; y++) {
@@ -883,7 +920,7 @@ export class SandTetrisGrid {
         }
       }
 
-      // Stack falling pieces on top of obstacles, column by column
+      // Stack all tetromino pieces on top of obstacles, column by column
       const columnHeights = new Map<number, number>();
       
       // Initialize column heights based on existing obstacles
@@ -897,21 +934,27 @@ export class SandTetrisGrid {
         columnHeights.set(x, columnHeight);
       }
 
-      // Place each falling piece on top of its column
-      for (const piece of fallingPieces) {
+      // Sort pieces by Y coordinate (top to bottom) to maintain relative positions
+      allTetrominoPieces.sort((a, b) => b.y - a.y);
+
+      // Place each piece on top of its column with base speed
+      for (const piece of allTetrominoPieces) {
         const currentHeight = columnHeights.get(piece.x) ?? -1;
         const targetY = currentHeight + 1;
         
         if (targetY < this.height) {
-          this.grid[targetY][piece.x] = this.createGrain(piece.color);
+          // Create grain with base speed (not spawning speed)
+          this.grid[targetY][piece.x] = this.createGrain(piece.color, false);
           columnHeights.set(piece.x, targetY); // Update column height
         }
       }
 
+      // Transition any remaining spawning speed grains to base speed
+      this.transitionSpawningGrainsToBaseSpeed();
+      
       this.canSpawnNewPiece = true;
       return true;
     }
-
 
     return false;
   }
