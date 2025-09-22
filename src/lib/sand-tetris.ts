@@ -75,6 +75,7 @@ export interface TetrominoSpawnState {
   isActive: boolean;
   shape: readonly (readonly number[])[];
   color: CellValue;
+  spawnTimer: number; // Timer for gradual spawning
 }
 
 // Direction vectors for neighbor checking (8-directional)
@@ -148,6 +149,7 @@ export class SandTetrisGrid {
   private connectedComponents = new Map<number, ConnectedComponent>();
   private nextComponentId = 1;
   private hasActiveEliminations = false;
+  private tetrominoSpawnState: TetrominoSpawnState | null = null;
   private isGameOver = false;
   private fallingPieceCells = new Set<string>();
   private canSpawnNewPiece = true;
@@ -229,6 +231,7 @@ export class SandTetrisGrid {
     this.connectedComponents.clear();
     this.nextComponentId = 1;
     this.hasActiveEliminations = false;
+    this.tetrominoSpawnState = null;
     this.isGameOver = false;
     this.fallingPieceCells.clear();
     this.canSpawnNewPiece = true;
@@ -462,46 +465,33 @@ export class SandTetrisGrid {
     
     const startX = Math.floor(Math.random() * (maxStartX + 1));
     
-    // Spawn the entire tetromino shape immediately above the grid
-    const baseSpawnY = this.height; // Start above the grid
+    // Set up gradual spawning state
+    this.tetrominoSpawnState = {
+      type,
+      startX,
+      currentRow: 0,
+      totalRows: tetrominoHeight,
+      isActive: true,
+      shape,
+      color,
+      spawnTimer: GRID_CONFIG.SPAWNING_GRAIN_SPEED // Timer for when to spawn next row
+    };
     
     this.fallingPieceCells.clear();
-    
-    // Place the complete tetromino shape
-    for (let shapeRow = 0; shapeRow < shape.length; shapeRow++) {
-      for (let shapeCol = 0; shapeCol < shape[shapeRow].length; shapeCol++) {
-        if (shape[shapeRow][shapeCol] === 1) {
-          const baseX = startX + (shapeCol * TETROMINO_BLOCK_SIZE);
-          const baseY = baseSpawnY - tetrominoHeight + (shapeRow * TETROMINO_BLOCK_SIZE);
-          
-          // Fill 5x5 block for this shape cell
-          for (let blockY = 0; blockY < TETROMINO_BLOCK_SIZE; blockY++) {
-            for (let blockX = 0; blockX < TETROMINO_BLOCK_SIZE; blockX++) {
-              const x = baseX + blockX;
-              const y = baseY + blockY;
-              
-              // Only place blocks that are within the grid
-              if (this.isValidPosition(x, y)) {
-                this.grid[y][x] = this.createGrain(color, true); // true = isSpawning
-                this.fallingPieceCells.add(this.positionToKey(x, y));
-              }
-            }
-          }
-        }
-      }
-    }
-    
     this.canSpawnNewPiece = false;
+    
     return true;
   }
 
   isSpawningTetromino(): boolean {
-    return this.fallingPieceCells.size > 0 && !this.canSpawnNewPiece;
+    return this.tetrominoSpawnState?.isActive ?? false;
   }
 
   getTetrominoSpawnProgress(): number {
-    // Since we spawn instantly now, always return 1 (complete)
-    return 1;
+    if (!this.tetrominoSpawnState?.isActive) {
+      return 1;
+    }
+    return this.tetrominoSpawnState.currentRow / this.tetrominoSpawnState.totalRows;
   }
 
   private checkCollisionWithPlacedPieces(x: number, y: number, direction: 'left' | 'right' | 'bottom'): boolean {
@@ -556,6 +546,62 @@ export class SandTetrisGrid {
     }
   }
 
+  /**
+   * Updates the gradual tetromino spawning process
+   * Spawns one row of sand every SPAWNING_GRAIN_SPEED ticks
+   */
+  private updateTetrominoSpawning(): boolean {
+    if (!this.tetrominoSpawnState?.isActive) {
+      return false;
+    }
+
+    // Decrease spawn timer
+    this.tetrominoSpawnState.spawnTimer--;
+
+    // Only spawn a new row when timer reaches 0
+    if (this.tetrominoSpawnState.spawnTimer > 0) {
+      return true; // Still spawning, but not this tick
+    }
+
+    const { shape, startX, currentRow, totalRows, color } = this.tetrominoSpawnState;
+    
+    // Check if we've finished spawning all rows
+    if (currentRow >= totalRows) {
+      this.tetrominoSpawnState = null;
+      return false;
+    }
+
+    // Reset timer for next row
+    this.tetrominoSpawnState.spawnTimer = GRID_CONFIG.SPAWNING_GRAIN_SPEED;
+
+    // Spawn one row at the top of the grid
+    const spawnY = this.height - 1;
+    const shapeRowIndex = Math.floor(currentRow / TETROMINO_BLOCK_SIZE);
+    
+    if (shapeRowIndex < shape.length) {
+      const shapeRow = shape[shapeRowIndex];
+      
+      for (let col = 0; col < shapeRow.length; col++) {
+        if (shapeRow[col] === 1) {
+          const baseX = startX + col * TETROMINO_BLOCK_SIZE;
+          for (let blockX = 0; blockX < TETROMINO_BLOCK_SIZE; blockX++) {
+            const x = baseX + blockX;
+            if (this.isValidPosition(x, spawnY) && this.grid[spawnY][x] === null) {
+              // Create grain with synchronized tick counter
+              // All grains from the same tetromino should move together
+              const grain = this.createGrain(color, true); // true = isSpawning
+              grain.ticks = GRID_CONFIG.SPAWNING_GRAIN_SPEED; // Sync with other grains
+              this.grid[spawnY][x] = grain;
+              this.fallingPieceCells.add(this.positionToKey(x, spawnY));
+            }
+          }
+        }
+      }
+    }
+
+    this.tetrominoSpawnState.currentRow++;
+    return true;
+  }
 
   /**
    * Simulates physics for sand particles falling down with timing system
@@ -568,6 +614,36 @@ export class SandTetrisGrid {
     const stuckBlocksAtTop = new Set<string>();
     let anyMovement = false;
 
+    // Check once if falling tetromino pieces should transition to base speed
+    let shouldTransitionAllFallingPieces = false;
+    if (this.fallingPieceCells.size > 0) {
+      // Check if any falling piece has a spawning speed grain touching a base speed grain
+      for (const fallingCellKey of this.fallingPieceCells) {
+        const { x: fx, y: fy } = this.keyToPosition(fallingCellKey);
+        const fallingGrain = this.grid[fy][fx];
+        
+        if (fallingGrain && fallingGrain.speed === GRID_CONFIG.SPAWNING_GRAIN_SPEED) {
+          const neighbors = [
+            [fx, fy - 1], [fx - 1, fy], [fx + 1, fy], [fx, fy + 1],  // orthogonal
+            [fx - 1, fy - 1], [fx + 1, fy - 1], [fx - 1, fy + 1], [fx + 1, fy + 1]  // diagonal
+          ];
+          
+          for (const [nx, ny] of neighbors) {
+            if (this.isValidPosition(nx, ny)) {
+              const neighborGrain = this.grid[ny][nx];
+              if (neighborGrain && 
+                  neighborGrain.speed === GRID_CONFIG.BASE_GRAIN_SPEED && 
+                  !this.fallingPieceCells.has(this.positionToKey(nx, ny))) {
+                shouldTransitionAllFallingPieces = true;
+                break;
+              }
+            }
+          }
+          if (shouldTransitionAllFallingPieces) break;
+        }
+      }
+    }
+
     // Process cells bottom-up for proper physics
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
@@ -577,36 +653,24 @@ export class SandTetrisGrid {
         const cellKey = this.positionToKey(x, y);
         const isFalling = this.fallingPieceCells.has(cellKey);
         
-        // Check if spawning grain should transition to base speed
-        let shouldTransitionSpeed = false;
-        if (grain.speed === GRID_CONFIG.SPAWNING_GRAIN_SPEED && isFalling) {
-          // Check if touching non-spawning grains
-          const neighbors = [
-            [x, y - 1], [x - 1, y], [x + 1, y], [x, y + 1],  // orthogonal
-            [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]  // diagonal
-          ];
-          
-          for (const [nx, ny] of neighbors) {
-            if (this.isValidPosition(nx, ny)) {
-              const neighborGrain = this.grid[ny][nx];
-              if (neighborGrain && 
-                  neighborGrain.speed === GRID_CONFIG.BASE_GRAIN_SPEED && 
-                  !this.fallingPieceCells.has(this.positionToKey(nx, ny))) {
-                shouldTransitionSpeed = true;
-                break;
-              }
-            }
-          }
-        }
+        // Apply synchronized speed transition for all falling pieces
+        const shouldTransitionSpeed = shouldTransitionAllFallingPieces && 
+                                     grain.speed === GRID_CONFIG.SPAWNING_GRAIN_SPEED && 
+                                     isFalling;
         
         // Update grain timing
         grain.ticks--;
         
         let placed = false;
         let newX = x, newY = y;
-        let newGrain = shouldTransitionSpeed ? 
-          { ...grain, speed: GRID_CONFIG.BASE_GRAIN_SPEED, ticks: GRID_CONFIG.BASE_GRAIN_SPEED } : 
-          grain;
+        
+        // Create new grain with potential speed transition
+        let newGrain = grain;
+        if (shouldTransitionSpeed) {
+          // When transitioning, synchronize all falling pieces to the same tick count
+          // This ensures they continue moving together at the new speed
+          newGrain = { ...grain, speed: GRID_CONFIG.BASE_GRAIN_SPEED, ticks: GRID_CONFIG.BASE_GRAIN_SPEED };
+        }
 
         // Only try to move if ticks reached 0
         if (grain.ticks <= 0) {
@@ -690,7 +754,9 @@ export class SandTetrisGrid {
       return true;
     }
 
-    // Tetromino spawning is now handled instantly in startTetrominoSpawn
+    // Update gradual tetromino spawning
+    const stillSpawning = this.updateTetrominoSpawning();
+    if (stillSpawning) anyChange = true;
 
     return anyChange;
   }
@@ -734,7 +800,10 @@ export class SandTetrisGrid {
       });
     }
     
-    // No tetromino state to copy since we spawn instantly
+    // Copy tetromino spawning state
+    if (this.tetrominoSpawnState) {
+      copy.tetrominoSpawnState = { ...this.tetrominoSpawnState };
+    }
     
     return copy;
   }
