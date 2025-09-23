@@ -43,6 +43,17 @@ export const TETROMINO_SHAPES = {
   Z: [[1, 1, 0], [0, 1, 1]]
 } as const;
 
+// 90-degree rotated versions of tetromino shapes
+export const TETROMINO_SHAPES_90 = {
+  I: [[1], [1], [1], [1]],
+  O: [[1, 1], [1, 1]],
+  T: [[1, 0], [1, 1], [1, 0]],
+  L: [[1, 1, 1], [1, 0, 0]],
+  J: [[1, 0, 0], [1, 1, 1]],
+  S: [[1, 0], [1, 1], [0, 1]],
+  Z: [[0, 1], [1, 1], [1, 0]]
+} as const;
+
 export type TetrominoType = keyof typeof TETROMINO_SHAPES;
 
 export const SAND_COLORS: readonly CellValue[] = [1, 2, 3, 4, 5];
@@ -153,6 +164,7 @@ export class SandTetrisGrid {
   private isGameOver = false;
   private fallingPieceCells = new Set<string>();
   private canSpawnNewPiece = true;
+  private activeTetrominoState: { type: TetrominoType; startX: number; color: CellValue; isRotated: boolean } | null = null;
   
   // Cache for position keys to reduce string operations
   private posKeyCache = new Map<number, string>();
@@ -461,6 +473,7 @@ export class SandTetrisGrid {
     
     this.fallingPieceCells.clear();
     this.canSpawnNewPiece = false;
+    this.activeTetrominoState = { type, startX, color, isRotated: false };
     
     return true;
   }
@@ -721,6 +734,7 @@ export class SandTetrisGrid {
         this.transitionSpawningGrainsToBaseSpeed();
         this.canSpawnNewPiece = true;
         this.fallingPieceCells.clear();
+        this.activeTetrominoState = null;
       }
     }
 
@@ -768,6 +782,9 @@ export class SandTetrisGrid {
     copy.isGameOver = this.isGameOver;
     copy.fallingPieceCells = new Set(this.fallingPieceCells);
     copy.canSpawnNewPiece = this.canSpawnNewPiece;
+    copy.activeTetrominoState = this.activeTetrominoState
+      ? { ...this.activeTetrominoState }
+      : null;
     
     // Deep copy components
     for (const [id, comp] of this.connectedComponents) {
@@ -914,6 +931,7 @@ export class SandTetrisGrid {
       this.transitionSpawningGrainsToBaseSpeed();
       
       this.canSpawnNewPiece = true;
+      this.activeTetrominoState = null;
       return true;
     }
 
@@ -994,6 +1012,150 @@ export class SandTetrisGrid {
       this.tetrominoSpawnState.startX = newStartX;
     }
 
+    // Update active tetromino anchor for falling/spawning states
+    if (this.activeTetrominoState) {
+      if (newStartX !== null) {
+        this.activeTetrominoState.startX = newStartX;
+      } else {
+        this.activeTetrominoState.startX = Math.max(0, Math.min(this.width - 1, this.activeTetrominoState.startX + dx));
+      }
+    }
+
     return true;
+  }
+
+  /**
+   * Rotates the currently active tetromino by 90 degrees.
+   * Toggles between original and 90-degree shapes.
+   * Preserves grain properties (speed, ticks, color).
+   * Prevents rotation if it would cause width overflow; allows upward overflow.
+   * Returns true if rotation occurred.
+   */
+  rotateActiveTetromino(): boolean {
+    // Must have either an active spawner or currently falling cells with active metadata
+    const isSpawning = this.tetrominoSpawnState?.isActive ?? false;
+    const hasFalling = this.fallingPieceCells.size > 0;
+    if (!isSpawning && !hasFalling) return false;
+
+    // Determine tetromino metadata
+    let tetrominoType: TetrominoType;
+    let currentStartX: number;
+    let tetrominoColor: CellValue;
+    let currentlyRotated = false;
+
+    if (isSpawning && this.tetrominoSpawnState) {
+      tetrominoType = this.tetrominoSpawnState.type;
+      currentStartX = this.tetrominoSpawnState.startX;
+      tetrominoColor = this.tetrominoSpawnState.color;
+      currentlyRotated = this.activeTetrominoState?.isRotated ?? false;
+    } else if (this.activeTetrominoState) {
+      tetrominoType = this.activeTetrominoState.type;
+      currentStartX = this.activeTetrominoState.startX;
+      tetrominoColor = this.activeTetrominoState.color;
+      currentlyRotated = this.activeTetrominoState.isRotated;
+    } else {
+      return false;
+    }
+
+    // Choose target shape by toggling rotation state
+    const targetShape = currentlyRotated ?
+      TETROMINO_SHAPES[tetrominoType] :
+      TETROMINO_SHAPES_90[tetrominoType];
+
+    // Width check to avoid overflow to the right
+    const newTetrominoWidth = targetShape[0].length * TETROMINO_BLOCK_SIZE;
+    if (currentStartX + newTetrominoWidth > this.width) {
+      return false;
+    }
+
+    // Compute the lowest Y (bottom-most) among current falling cells; if none yet, use top row
+    let lowestY = this.height; // min y among piece cells (remember y=0 bottom)
+    for (const cellKey of this.fallingPieceCells) {
+      const { y } = this.keyToPosition(cellKey);
+      lowestY = Math.min(lowestY, y);
+    }
+    if (lowestY === this.height) {
+      lowestY = this.height - 1;
+    }
+
+    // Collect existing grains to preserve speed/ticks
+    const existingGrains: SandGrain[] = [];
+    for (const cellKey of this.fallingPieceCells) {
+      const { x, y } = this.keyToPosition(cellKey);
+      const grain = this.grid[y][x];
+      if (grain) existingGrains.push({ ...grain });
+    }
+
+    // Determine default speed type for any newly created grains
+    const anySpawningSpeed = existingGrains.some(g => g.speed === GRID_CONFIG.SPAWNING_GRAIN_SPEED);
+
+    // Clear current piece cells from grid
+    for (const cellKey of this.fallingPieceCells) {
+      const { x, y } = this.keyToPosition(cellKey);
+      if (this.isValidPosition(x, y)) this.grid[y][x] = null;
+    }
+    this.fallingPieceCells.clear();
+
+    // Place rotated shape aligned so its bottom aligns to lowestY
+    const shapeHeight = targetShape.length;
+    const newFallingCells = new Set<string>();
+    let grainIndex = 0;
+
+    for (let shapeRow = 0; shapeRow < shapeHeight; shapeRow++) {
+      const row = targetShape[shapeRow]; // shape rows are top-to-bottom
+      for (let col = 0; col < row.length; col++) {
+        if (row[col] !== 1) continue;
+
+        const baseX = currentStartX + col * TETROMINO_BLOCK_SIZE;
+        const verticalRowOffset = (shapeHeight - 1 - shapeRow) * TETROMINO_BLOCK_SIZE; // align bottom
+
+        for (let blockY = 0; blockY < TETROMINO_BLOCK_SIZE; blockY++) {
+          for (let blockX = 0; blockX < TETROMINO_BLOCK_SIZE; blockX++) {
+            const x = baseX + blockX;
+            const y = lowestY + blockY + verticalRowOffset;
+
+            if (!this.isValidPosition(x, y)) continue; // allow upward overflow by skipping out-of-bounds
+
+            // Reuse existing grain properties when available, else create new
+            let grain: SandGrain;
+            if (grainIndex < existingGrains.length) {
+              grain = { ...existingGrains[grainIndex], color: tetrominoColor };
+            } else {
+              grain = this.createGrain(tetrominoColor, anySpawningSpeed || isSpawning);
+            }
+            this.grid[y][x] = grain;
+            newFallingCells.add(this.positionToKey(x, y));
+
+            grainIndex++;
+          }
+        }
+      }
+    }
+
+    // Update state
+    this.fallingPieceCells = newFallingCells;
+
+    // Stop spawning since we've placed the full rotated piece
+    if (this.tetrominoSpawnState) {
+      this.tetrominoSpawnState.isActive = false;
+      this.tetrominoSpawnState = null;
+    }
+
+    // Toggle rotated flag in active metadata
+    if (!this.activeTetrominoState) {
+      this.activeTetrominoState = { type: tetrominoType, startX: currentStartX, color: tetrominoColor, isRotated: !currentlyRotated };
+    } else {
+      this.activeTetrominoState.isRotated = !currentlyRotated;
+      this.activeTetrominoState.startX = currentStartX;
+      this.activeTetrominoState.type = tetrominoType;
+      this.activeTetrominoState.color = tetrominoColor;
+    }
+
+    return true;
+  }
+
+  // Alias requested as `rotate`
+  rotate(): boolean {
+    return this.rotateActiveTetromino();
   }
 }
