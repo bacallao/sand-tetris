@@ -31,6 +31,9 @@ export default function SandTetrisDebug({
   const isPlacingRef = useRef(false)
   const lastPlaceRef = useRef<{ x: number; y: number } | null>(null)
 
+  // Number of simulation steps to perform per animation frame for faster ticking
+  const STEPS_PER_FRAME = 3
+
   // Cleanup any running animation on unmount
   useEffect(() => {
     return () => {
@@ -198,9 +201,14 @@ export default function SandTetrisDebug({
       }
       
       // Tetromino spawning is now handled within the step() method
-      
-      // Always step the simulation - it handles both physics and elimination
-      gridRef.current.step()
+
+      // Perform multiple simulation steps per frame for faster ticking
+      let stepsDone = 0
+      for (let i = 0; i < STEPS_PER_FRAME; i++) {
+        gridRef.current.step()
+        stepsDone++
+        if (gridRef.current.getIsGameOver()) break
+      }
       
       // Check for game over after stepping
       if (gridRef.current.getIsGameOver()) {
@@ -210,13 +218,13 @@ export default function SandTetrisDebug({
         rafIdRef.current = null
         // Update UI one final time to show game over state
         setGrid(gridRef.current.clone())
-        setStepCount(prev => prev + 1)
+        setStepCount(prev => prev + stepsDone)
         return
       }
       
       // Always update the UI to show current state
       setGrid(gridRef.current.clone())
-      setStepCount(prev => prev + 1)
+      setStepCount(prev => prev + stepsDone)
       
       // Continue animation loop only if still playing
       if (isPlayingRef.current) {

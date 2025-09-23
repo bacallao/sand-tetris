@@ -29,7 +29,7 @@ export const GRID_CONFIG = {
   BLINK_INTERVAL: 5,
   // Grain timing configuration
   BASE_GRAIN_SPEED: 1,      // Standard speed for all grains
-  SPAWNING_GRAIN_SPEED: 5,  // Slower speed for spawning tetromino blocks
+  SPAWNING_GRAIN_SPEED: 10,  // Slower speed for spawning tetromino blocks
 } as const;
 
 // Tetromino shapes - each 1 represents a 5x5 block of sand

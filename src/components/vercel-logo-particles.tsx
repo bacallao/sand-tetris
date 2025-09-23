@@ -17,8 +17,9 @@ export default function Component() {
   }, [])
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const refCurrent = canvasRef.current
+    if (!refCurrent) return
+    const canvas = refCurrent
 
     const ctx = canvas.getContext("2d")
     if (!ctx) return

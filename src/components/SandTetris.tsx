@@ -1,23 +1,13 @@
 "use client"
 
 import React, { useRef, useEffect, useState, useCallback } from 'react'
-import { SandTetrisGrid, CellValue, GRID_CONFIG } from '@/lib/sand-tetris'
+import { SandTetrisGrid, CellValue, GRID_CONFIG, CELL_COLORS } from '@/lib/sand-tetris'
 
 interface SandTetrisProps {
   cellSize?: number
   viewportWidth?: number
   viewportHeight?: number
   className?: string
-}
-
-// Color mapping for cell values
-const CELL_COLORS: Record<CellValue, string> = {
-  0: '#000000', // Empty - Black
-  1: '#FFD700', // Sand - Gold
-  2: '#4169E1', // Water - Royal Blue
-  3: '#8B4513', // Earth - Saddle Brown
-  4: '#DC143C', // Fire - Crimson
-  5: '#32CD32', // Plant - Lime Green
 }
 
 const CELL_NAMES: Record<CellValue, string> = {
@@ -27,6 +17,7 @@ const CELL_NAMES: Record<CellValue, string> = {
   3: 'Earth',
   4: 'Fire',
   5: 'Plant',
+  6: 'White',
 }
 
 export default function SandTetris({
@@ -46,9 +37,9 @@ export default function SandTetris({
   const [isPanning, setIsPanning] = useState(false)
   const [lastPanPosition, setLastPanPosition] = useState({ x: 0, y: 0 })
   const [isSimulationRunning, setIsSimulationRunning] = useState(true)
-  const [simulationSpeed, setSimulationSpeed] = useState(60) // milliseconds between physics updates
+  const [simulationSpeed, setSimulationSpeed] = useState(16) // milliseconds between physics updates (faster)
   const [gridStats, setGridStats] = useState<Record<CellValue, number>>({
-    0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0
+    0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0
   })
 
   // Calculate how many cells fit in the viewport
@@ -127,10 +118,10 @@ export default function SandTetris({
   // Update grid statistics
   const updateStats = useCallback(() => {
     const stats: Record<CellValue, number> = {
-      0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0
+      0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0
     }
     
-    for (let value = 0; value <= 5; value++) {
+    for (let value = 0; value <= GRID_CONFIG.MAX_CELL_VALUE; value++) {
       stats[value as CellValue] = gridRef.current.countCells(value as CellValue)
     }
     
